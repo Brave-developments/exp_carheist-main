@@ -1,5 +1,5 @@
 local plane
-
+local spawnedVehicles = {}
 Citizen.CreateThread(function()
     if START_SCENE.enable then
         local ped = SpawnNPC(START_SCENE.ped.model, START_SCENE.ped.coords, START_SCENE.ped.heading)
@@ -17,36 +17,32 @@ Citizen.CreateThread(function()
     end
 end)
 
+
+local airportBlip, buyerBlip
+
 function StartCarHeist()
     TriggerServerCallback('exp_carheist:checkPoliceCount', function(enough_police)
         if not enough_police then
-            ShowNotification({
-                message = _("not_enough_police"),
-                type = "error"
-            })
+            ShowNotification({ message = _("not_enough_police"), type = "error" })
             return
         end
 
         TriggerServerCallback('exp_carheist:checkTime', function(already_robbed)
             if already_robbed then
-                ShowNotification({
-                    message = _("already_robbed"),
-                    type = "error"
-                })
+                ShowNotification({ message = _("already_robbed"), type = "error" })
                 return
             end
+            ShowNotification({ message = _("start_heist"), type = "default" })
+           airportBlip = SetBlip(_('airport_blip'), "airport_blip", PLANE.coords, 90, 1, 0.8)
+             SetBlipRoute(airportBlip, true)
+             SetBlipRouteColour(airportBlip, 5)
+            SetNewWaypoint(PLANE.coords.x, PLANE.coords.y)
 
-            ShowNotification({
-                message = _("start_heist"),
-                type = "default"
-            })
-            
-            local blip = SetBlip(_('airport_blip'), "airport_blip", PLANE.coords, 90, 1, 0.8)
-            SetBlipAsShortRange(blip, false)
             SetupCarHeist()
         end)
     end)
 end
+
 
 RegisterNetEvent("exp_carheist:StartHeist")
 AddEventHandler("exp_carheist:StartHeist", StartCarHeist)
@@ -78,47 +74,97 @@ end)
 function SetupScene()
     TriggerServerCallback("exp_carheist:HaveVehiclesSpawn", function(has_spawned)
         if not has_spawned then
-            SpawnGuards({ center = PLANE.coords})
+            SpawnGuards({ center = PLANE.coords })
+
             for i, v in ipairs(CARS) do
-                local x,y,z = table.unpack(PLANE.coords)
+                local x, y, z = table.unpack(PLANE.coords)
                 RequestModel(v.model)
-                while not HasModelLoaded(v.model) do Wait(50) end
-                local car = CreateVehicle(v.model, vector3(x,y,z+10), 0.0, 1, 1)
+                while not HasModelLoaded(v.model) do
+                    Wait(50)
+                end
+
+                local car = CreateVehicle(v.model, vector3(x, y, z + 10), 0.0, 1, 1)
                 FreezeEntityPosition(car, true)
                 SetVehicleDoorsLocked(car, 2)
-                AttachEntityToEntity(car, plane, 0, v.offset, 0.0, 0.0, GetEntityHeading(plane)-240, false, false, true, false, 1, true)
+                AttachEntityToEntity(
+                    car,
+                    plane,
+                    0,
+                    v.offset,
+                    0.0,
+                    0.0,
+                    GetEntityHeading(plane) - 240,
+                    false,
+                    false,
+                    true,
+                    false,
+                    1,
+                    true
+                )
 
+                table.insert(spawnedVehicles, car)
                 AddEntityMenuItem({
                     entity = car,
-                    event = "exp_carheist:HackVehicle",
-                    desc = _("hack"),
-                    name = _("vehicle_name", firstToUpper(GetDisplayNameFromVehicleModel(v.model):lower()))
+                    event  = "exp_carheist:HackVehicle",
+                    desc   = _("hack"),
+                    name   = _("vehicle_name", firstToUpper(GetDisplayNameFromVehicleModel(v.model):lower()))
                 })
             end
 
         else
-
             local vehicles = GetVehiclesInArea(PLANE.coords, 50.0)
-            while #vehicles == 0 do Wait(5000)
-                GetVehiclesInArea(PLANE.coords, 50.0)
+
+            while #vehicles == 0 do
+                Wait(5000)
+                vehicles = GetVehiclesInArea(PLANE.coords, 50.0)
             end
+
             for i, v in ipairs(vehicles) do
                 if GetEntityAttachedTo(v) == plane then
-                    
                     AddEntityMenuItem({
                         entity = v,
-                        event = "exp_carheist:HackVehicle",
-                        desc = _("hack"),
-                        name = _("vehicle_name", firstToUpper(GetDisplayNameFromVehicleModel(v.model):lower()))
+                        event  = "exp_carheist:HackVehicle",
+                        desc   = _("hack"),
+                        name   = _("vehicle_name", firstToUpper(GetDisplayNameFromVehicleModel(v):lower()))
                     })
+                    table.insert(spawnedVehicles, v)
                 end
             end
-
         end
     end)
-
 end
 
+
+local function CleanupHeist()
+    if plane and DoesEntityExist(plane) then
+        DeleteEntity(plane)
+        plane = nil
+    end
+
+    for _, car in ipairs(spawnedVehicles) do
+        if DoesEntityExist(car) then
+            DeleteEntity(car)
+        end
+    end
+    spawnedVehicles = {}
+
+    for _, guard in ipairs(guardPeds) do
+        if DoesEntityExist(guard) then
+            DeletePed(guard)
+        end
+    end
+    guardPeds = {}
+
+    if airportBlip then
+        RemoveBlip(airportBlip)
+        airportBlip = nil
+    end
+
+    if buyerBlip then
+        RemoveBlip(buyerBlip)
+        buyerBlip = nil
+    end
+end
 AddEventHandler("exp_carheist:HackVehicle", function(entity)
     entity = type(entity) == "number" and entity or entity.entity
     HackVehicle(entity)
@@ -169,14 +215,17 @@ function Deliver(vehicle, no_info)
         local ped = PlayerPedId()
 
         if not no_info then
-            ShowNotification({
-                message = _("deliver"),
-                type = "default"
-            })
-            DeleteBlip("airport_blip")
-            local blip = SetBlip(_('buyer_blip'), "buyer_blip", SELLER_SCENE.finish, 500, 1, 0.8)
-            SetBlipAsShortRange(blip, false)
-        end
+  ShowNotification({ message = _("deliver"), type = "default" })
+  -- remove the old airport blip
+  if airportBlip then
+    RemoveBlip(airportBlip)
+    airportBlip = nil
+  end
+
+  buyerBlip = SetBlip(_('buyer_blip'), "buyer_blip", SELLER_SCENE.finish, 500, 1, 0.8)
+  SetBlipAsShortRange(buyerBlip, false)
+end
+
         
         local _wait = 2000
         while true do Wait(_wait)
@@ -202,6 +251,7 @@ function Deliver(vehicle, no_info)
             if dist < 2.0 then
                 TriggerServerEvent("exp_carheist:SoldVehicle", GetEntityHealth(vehicle))
                 DeleteEntity(vehicle)
+                      CleanupHeist()
                 DeleteBlip("buyer_blip")
                 break
             elseif dist > 15.0 then
@@ -262,5 +312,6 @@ function SpawnGuards(data)
         SetPedFleeAttributes(guard, 0, false)
         GiveWeaponToPed(guard, GetHashKey(GUARDS.weapons[math.random(#GUARDS.weapons)]), 255, false, true)
         TaskGuardCurrentPosition(guard, 10.0, 10.0, true)
+          table.insert(guardPeds, guard)
     end
 end
